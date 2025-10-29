@@ -369,18 +369,28 @@ function closeDownloadModal() {
 
 // --- មុខងារ​ស្នូល​សម្រាប់ Download ---
 async function handleDownload(type) { // type can be 'leave' or 'out'
-    if (isDownloading) return; // ការពារ​ការ​ចុច​ពីរ​ដង
+    // --- *** LOGGING START *** ---
+    console.log(`handleDownload called for type: ${type}`);
+    if (isDownloading) {
+        console.log("Download already in progress. Aborting.");
+        return;
+    }
+    // --- *** LOGGING END *** ---
 
     isDownloading = true;
     downloadLeaveBtn.disabled = true;
     downloadOutBtn.disabled = true;
-    downloadStatus.textContent = 'កំពុង​ទាញ​ទិន្នន័យ...';
+    downloadStatus.textContent = 'កំពុង​ទាញ​ទិន្ននន័យ...';
     downloadStatus.classList.remove('text-red-500', 'text-green-500');
     downloadStatus.classList.add('text-blue-500');
 
     const downloadType = document.querySelector('input[name="download-type"]:checked').value;
     const collectionPath = type === 'leave' ? leaveRequestsCollectionPath : outRequestsCollectionPath;
     const fileNameBase = type === 'leave' ? 'Leave_Requests' : 'Out_Requests';
+
+    // --- *** LOGGING START *** ---
+    console.log(`Selected download type: ${downloadType}`);
+    // --- *** LOGGING END *** ---
 
     let q; // Firestore Query
     let fileNameSuffix = '';
@@ -390,6 +400,9 @@ async function handleDownload(type) { // type can be 'leave' or 'out'
         if (downloadType === 'range') {
             const startDateStr = downloadStartDate.value;
             const endDateStr = downloadEndDate.value;
+             // --- *** LOGGING START *** ---
+            console.log(`Date range selected: ${startDateStr} to ${endDateStr}`);
+            // --- *** LOGGING END *** ---
             if (!startDateStr || !endDateStr) throw new Error("សូម​ជ្រើសរើស​ថ្ងៃ​ចាប់ផ្តើម និង​បញ្ចប់");
 
             // +1 day to endDate to include the whole day
@@ -398,6 +411,9 @@ async function handleDownload(type) { // type can be 'leave' or 'out'
 
             const startTimestamp = Timestamp.fromDate(new Date(startDateStr));
             const endTimestamp = Timestamp.fromDate(end);
+            // --- *** LOGGING START *** ---
+            console.log("Timestamps for query:", startTimestamp, endTimestamp);
+            // --- *** LOGGING END *** ---
 
             // Query based on 'decisionAt' for approved requests within the date range
             q = query(
@@ -411,12 +427,18 @@ async function handleDownload(type) { // type can be 'leave' or 'out'
         } else if (downloadType === 'month') {
             const month = parseInt(downloadSelectMonth.value);
             const year = parseInt(downloadSelectYear.value);
+            // --- *** LOGGING START *** ---
+            console.log(`Month/Year selected: ${month + 1}/${year}`);
+            // --- *** LOGGING END *** ---
 
             const startDate = new Date(year, month, 1);
             const endDate = new Date(year, month + 1, 1);
 
             const startTimestamp = Timestamp.fromDate(startDate);
             const endTimestamp = Timestamp.fromDate(endDate);
+             // --- *** LOGGING START *** ---
+            console.log("Timestamps for query:", startTimestamp, endTimestamp);
+            // --- *** LOGGING END *** ---
 
             // Query based on 'decisionAt' for approved requests within the selected month/year
             q = query(
@@ -428,6 +450,9 @@ async function handleDownload(type) { // type can be 'leave' or 'out'
             fileNameSuffix = `_${String(month + 1).padStart(2, '0')}-${year}`;
 
         } else { // downloadType === 'all'
+            // --- *** LOGGING START *** ---
+            console.log("All data selected.");
+             // --- *** LOGGING END *** ---
              q = query(
                 collection(db, collectionPath),
                 where("status", "==", "approved")
@@ -439,11 +464,20 @@ async function handleDownload(type) { // type can be 'leave' or 'out'
         downloadStatus.textContent = 'កំពុង​ប្រមូល​ទិន្នន័យ...';
 
         // --- ទាញ​ទិន្នន័យ​ទាំង​អស់ (ប្រើ getDocs) ---
+        // --- *** LOGGING START *** ---
+        console.log("Executing Firestore getDocs query...");
+        // --- *** LOGGING END *** ---
         const querySnapshot = await getDocs(q);
+        // --- *** LOGGING START *** ---
+        console.log(`Firestore query completed. Found ${querySnapshot.size} documents.`);
+        // --- *** LOGGING END *** ---
         const dataToExport = [];
 
         querySnapshot.forEach((doc) => {
             const data = doc.data();
+            // --- *** LOGGING START *** ---
+            // console.log("Processing doc:", doc.id, data); // Log each document if needed
+            // --- *** LOGGING END *** ---
             // រៀបចំ​ទិន្នន័យ​សម្រាប់ Excel
             const formattedData = {
                 "ID ស្នើសុំ": data.requestId || '',
@@ -466,15 +500,30 @@ async function handleDownload(type) { // type can be 'leave' or 'out'
         });
 
         if (dataToExport.length === 0) {
+            // --- *** LOGGING START *** ---
+            console.log("No data found for the selected criteria.");
+            // --- *** LOGGING END *** ---
             throw new Error("រក​មិន​ឃើញ​ទិន្នន័យ​សម្រាប់​លក្ខខណ្ឌ​នេះ​ទេ។");
         }
 
+        // --- *** LOGGING START *** ---
         console.log(`Found ${dataToExport.length} records to export.`);
+        // console.log("Data prepared for Excel:", dataToExport); // Log data if needed, can be large
+        // --- *** LOGGING END *** ---
         downloadStatus.textContent = 'កំពុង​បង្កើត​ឯកសារ Excel...';
 
         // --- បង្កើត Excel ដោយ​ប្រើ SheetJS ---
+        // --- *** LOGGING START *** ---
+        console.log("Checking if XLSX library is loaded:", typeof XLSX !== 'undefined');
+        // --- *** LOGGING END *** ---
+        if (typeof XLSX === 'undefined') {
+             throw new Error("បណ្ណាល័យ Excel (XLSX) មិន​បាន​ផ្ទុក​ត្រឹមត្រូវ​ទេ។");
+        }
+
         // 1. បង្កើត Worksheet
+        console.log("Creating worksheet...");
         const ws = XLSX.utils.json_to_sheet(dataToExport);
+        console.log("Worksheet created.");
 
         // --- កំណត់ chiều rộng của cột (ស្រេចចិត្ត) ---
         const columnWidths = [
@@ -494,17 +543,29 @@ async function handleDownload(type) { // type can be 'leave' or 'out'
             columnWidths.push({ wch: 20 }); // ម៉ោងចូលវិញ
         }
         ws['!cols'] = columnWidths;
+        console.log("Column widths set.");
 
 
         // 2. បង្កើត Workbook ថ្មី
+        console.log("Creating workbook...");
         const wb = XLSX.utils.book_new();
+        console.log("Workbook created.");
 
         // 3. បញ្ចូល Worksheet ទៅ Workbook
+        console.log("Appending sheet to workbook...");
         XLSX.utils.book_append_sheet(wb, ws, "Approved Requests"); // ตั้งชื่อ Sheet
+        console.log("Sheet appended.");
 
         // 4. បង្កើត និង​ទាញ​យក​ឯកសារ Excel
         const fileName = `${fileNameBase}${fileNameSuffix}.xlsx`;
+        // --- *** LOGGING START *** ---
+        console.log(`Attempting to write and download file: ${fileName}`);
+        // --- *** LOGGING END *** ---
         XLSX.writeFile(wb, fileName);
+        // --- *** LOGGING START *** ---
+        console.log("XLSX.writeFile executed.");
+        // --- *** LOGGING END *** ---
+
 
         downloadStatus.textContent = 'ទាញយក​បាន​ជោគជ័យ!';
         downloadStatus.classList.remove('text-blue-500', 'text-red-500');
@@ -513,7 +574,8 @@ async function handleDownload(type) { // type can be 'leave' or 'out'
         // បិទ Modal បន្ទាប់ពីជោគជ័យ (ស្រេចចិត្ត)
         setTimeout(() => {
            // closeDownloadModal(); // អ្នកអាច uncomment វិញ បើចង់ឲ្យវាបិទស្វ័យប្រវត្តិ
-        }, 2000);
+           console.log("Download process finished successfully.");
+        }, 1500); // Reduced timeout for faster feedback
 
 
     } catch (error) {
@@ -526,6 +588,9 @@ async function handleDownload(type) { // type can be 'leave' or 'out'
         isDownloading = false;
         downloadLeaveBtn.disabled = false;
         downloadOutBtn.disabled = false;
+        // --- *** LOGGING START *** ---
+        console.log("Download process finished (finally block). isDownloading set to false.");
+        // --- *** LOGGING END *** ---
     }
 }
 
