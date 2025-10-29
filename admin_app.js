@@ -1,30 +1,35 @@
 // --- នាំចូល Firebase SDKs ---
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { getFirestore, collection, query, where, onSnapshot, Timestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { getFirestore, collection, query, where, onSnapshot, getDocs, Timestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js"; // Added getDocs
 
 // Enable Firestore debug logging
 setLogLevel('debug');
 
 // --- ការកំណត់រចនាសម្ព័ន្ធ Firebase (ដូចគ្នានឹងកម្មវិធី User) ---
-// (សូម​ប្រាកដ​ថា​ព័ត៌មាន​នេះ​ត្រឹមត្រូវ)
-const firebaseConfig = { 
-    apiKey: "AIzaSyDjr_Ha2RxOWEumjEeSdluIW3JmyM76mVk", 
-    authDomain: "dipermisstion.firebaseapp.com", 
-    projectId: "dipermisstion", 
-    storageBucket: "dipermisstion.firebasestorage.app", 
-    messagingSenderId: "512999406057", 
-    appId: "1:512999406057:web:953a281ab9dde7a9a0f378", 
-    measurementId: "G-KDPHXZ7H4B" 
+const firebaseConfig = {
+    apiKey: "AIzaSyDjr_Ha2RxOWEumjEeSdluIW3JmyM76mVk",
+    authDomain: "dipermisstion.firebaseapp.com",
+    projectId: "dipermisstion",
+    storageBucket: "dipermisstion.firebasestorage.app",
+    messagingSenderId: "512999406057",
+    appId: "1:512999406057:web:953a281ab9dde7a9a0f378",
+    measurementId: "G-KDPHXZ7H4B"
 };
 
-// --- ផ្លូវ (Path) ទៅកាន់ Collections (ដូចគ្នានឹងកម្មវិធី User) ---
+// --- ផ្លូវ (Path) ទៅកាន់ Collections ---
 let leaveRequestsCollectionPath, outRequestsCollectionPath;
 
 // --- Global Variables ---
 let db, auth;
 let tabLeave, tabOut, pageLeave, pageOut, leaveListContainer, outListContainer, leavePlaceholder, outPlaceholder, loadingIndicator;
 let openFilterBtn, filterModal, filterMonth, filterYear, applyFilterBtn, cancelFilterBtn;
+
+// --- Variables ថ្មី​សម្រាប់ Download ---
+let openDownloadBtn, downloadModal, cancelDownloadBtn, downloadStatus;
+let downloadStartDate, downloadEndDate, downloadSelectMonth, downloadSelectYear;
+let downloadLeaveBtn, downloadOutBtn;
+let isDownloading = false; // Flag to prevent multiple downloads
 
 let currentFilterMonth, currentFilterYear;
 let leaveUnsubscribe = null;
@@ -50,8 +55,15 @@ function formatFirestoreTimestamp(timestamp, format = 'HH:mm dd/MM/yyyy') {
 
     if (format === 'HH:mm' || format === 'time') return `${hours}:${minutes}`;
     if (format === 'dd/MM/yyyy' || format === 'date') return `${day}/${month}/${year}`;
+    if (format === 'yyyy-mm-dd') return `${year}-${month}-${day}`; // Format សម្រាប់ input date
     return `${hours}:${minutes} ${day}/${month}/${year}`;
 }
+
+// Function to get today's date in yyyy-mm-dd format
+function getTodayInputDate() {
+    return formatFirestoreTimestamp(new Date(), 'yyyy-mm-dd');
+}
+
 
 // --- App Initialization ---
 document.addEventListener('DOMContentLoaded', async () => {
@@ -73,14 +85,36 @@ document.addEventListener('DOMContentLoaded', async () => {
     applyFilterBtn = document.getElementById('apply-filter-btn');
     cancelFilterBtn = document.getElementById('cancel-filter-btn');
 
+    // --- Element References ថ្មី​សម្រាប់ Download ---
+    openDownloadBtn = document.getElementById('open-download-btn');
+    downloadModal = document.getElementById('download-modal');
+    cancelDownloadBtn = document.getElementById('cancel-download-btn');
+    downloadStatus = document.getElementById('download-status');
+    downloadStartDate = document.getElementById('download-start-date');
+    downloadEndDate = document.getElementById('download-end-date');
+    downloadSelectMonth = document.getElementById('download-select-month');
+    downloadSelectYear = document.getElementById('download-select-year');
+    downloadLeaveBtn = document.getElementById('download-leave-btn');
+    downloadOutBtn = document.getElementById('download-out-btn');
+
+
     // --- កំណត់ Filter ដំបូង (ខែ និង ឆ្នាំ បច្ចុប្បន្ន) ---
     const now = new Date();
     currentFilterMonth = now.getMonth(); // 0-11
     currentFilterYear = now.getFullYear();
-    
-    // Update <select> ឲ្យ​បង្ហាញ​តម្លៃ​បច្ចុប្បន្ន
+
+    // Update <select> ឲ្យ​បង្ហាញ​តម្លៃ​បច្ចុប្បន្ន (សម្រាប់ Filter)
     filterMonth.value = currentFilterMonth;
+    // កំណត់ឆ្នាំបច្ចុប្បន្ន (ប្រសិនបើឆ្នាំបច្ចុប្បន្នមិនមានក្នុង list សូមបន្ថែម)
+    addYearOptionIfNeeded(filterYear, currentFilterYear);
     filterYear.value = currentFilterYear;
+
+    // --- Populate Download Modal Selects ---
+    populateMonthSelect(downloadSelectMonth, currentFilterMonth);
+    populateYearSelect(downloadSelectYear, currentFilterYear);
+    downloadStartDate.value = getTodayInputDate(); // Set default date
+    downloadEndDate.value = getTodayInputDate();   // Set default date
+
 
     // --- កំណត់ Event Listeners ---
     tabLeave.addEventListener('click', () => showTab('leave'));
@@ -89,18 +123,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     cancelFilterBtn.addEventListener('click', closeFilterModal);
     applyFilterBtn.addEventListener('click', applyFilter);
 
+    // --- Event Listeners ថ្មី​សម្រាប់ Download ---
+    openDownloadBtn.addEventListener('click', openDownloadModal);
+    cancelDownloadBtn.addEventListener('click', closeDownloadModal);
+    downloadLeaveBtn.addEventListener('click', () => handleDownload('leave'));
+    downloadOutBtn.addEventListener('click', () => handleDownload('out'));
+
+
     // --- Firebase Initialization & Auth ---
     try {
         if (!firebaseConfig.projectId) throw new Error("projectId not provided in firebase.initializeApp.");
-        
+
         const app = initializeApp(firebaseConfig);
         db = getFirestore(app);
         auth = getAuth(app);
-        
+
         const canvasAppId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
         leaveRequestsCollectionPath = `/artifacts/${canvasAppId}/public/data/leave_requests`;
         outRequestsCollectionPath = `/artifacts/${canvasAppId}/public/data/out_requests`;
-        
+
         console.log("Admin App: Using Firestore Leave Path:", leaveRequestsCollectionPath);
         console.log("Admin App: Using Firestore Out Path:", outRequestsCollectionPath);
 
@@ -141,10 +182,10 @@ function showTab(tabName) {
     }
 }
 
-// --- មុខងារ​ទាញ​ទិន្នន័យ​តាម Filter ---
+// --- មុខងារ​ទាញ​ទិន្នន័យ​តាម Filter (សម្រាប់បង្ហាញលើអេក្រង់) ---
 function fetchFilteredData() {
-    console.log(`Fetching data for: ${currentFilterMonth + 1}/${currentFilterYear}`);
-    
+    console.log(`Fetching display data for: ${currentFilterMonth + 1}/${currentFilterYear}`);
+
     // បង្ហាញ Loading
     loadingIndicator.classList.remove('hidden');
     leavePlaceholder.classList.add('hidden');
@@ -156,21 +197,19 @@ function fetchFilteredData() {
     if (leaveUnsubscribe) leaveUnsubscribe();
     if (outUnsubscribe) outUnsubscribe();
 
-    // គណនា​ថ្ងៃ​ចាប់ផ្ដើម និង​ថ្ងៃ​បញ្ចប់​នៃ​ខែ​ដែល​បាន​ជ្រើសរើស
+    // គណនា​ថ្ងៃ​ចាប់ផ្ដើម និង​ថ្ងៃ​បញ្ចប់​នៃ​ខែ​ដែល​បាន​ជ្រើសរើស (សម្រាប់ onSnapshot)
     try {
         const startDate = new Date(currentFilterYear, currentFilterMonth, 1);
         const endDate = new Date(currentFilterYear, currentFilterMonth + 1, 1);
-        
+
         const startTimestamp = Timestamp.fromDate(startDate);
         const endTimestamp = Timestamp.fromDate(endDate);
 
-        // --- បង្កើត Query សម្រាប់ ច្បាប់ឈប់សម្រាក ---
-        // 1. ត្រូវតែ "approved"
-        // 2. ត្រូវតែ​នៅ​ក្នុង​ចន្លោះ​ពេល​ដែល​បាន​ជ្រើសរើស (ផ្អែក​លើ requestedAt)
+        // --- បង្កើត Query សម្រាប់ ច្បាប់ឈប់សម្រាក (onSnapshot) ---
         const leaveQuery = query(
             collection(db, leaveRequestsCollectionPath),
             where("status", "==", "approved"),
-            where("requestedAt", ">=", startTimestamp),
+            where("requestedAt", ">=", startTimestamp), // Filter by requestedAt for consistency
             where("requestedAt", "<", endTimestamp)
         );
 
@@ -185,11 +224,11 @@ function fetchFilteredData() {
             loadingIndicator.classList.add('hidden');
         });
 
-        // --- បង្កើត Query សម្រាប់ ច្បាប់ចេញក្រៅ ---
+        // --- បង្កើត Query សម្រាប់ ច្បាប់ចេញក្រៅ (onSnapshot) ---
         const outQuery = query(
             collection(db, outRequestsCollectionPath),
             where("status", "==", "approved"),
-            where("requestedAt", ">=", startTimestamp),
+            where("requestedAt", ">=", startTimestamp), // Filter by requestedAt for consistency
             where("requestedAt", "<", endTimestamp)
         );
 
@@ -205,22 +244,22 @@ function fetchFilteredData() {
         });
 
     } catch (e) {
-        console.error("Error creating date query:", e);
+        console.error("Error creating date query for display:", e);
         loadingIndicator.innerHTML = `<p class="text-red-600 font-semibold">Error: ${e.message}</p>`;
     }
 }
 
-// --- មុខងារ​បង្ហាញ Card ក្នុង​បញ្ជី ---
+// --- មុខងារ​បង្ហាញ Card ក្នុង​បញ្ជី (ដូចមុន) ---
 function renderHistoryList(snapshot, container, placeholder, type) {
     if (!container || !placeholder) return;
-    
+
     if (snapshot.empty) {
         placeholder.classList.remove('hidden');
         container.innerHTML = '';
     } else {
         placeholder.classList.add('hidden');
         container.innerHTML = '';
-        
+
         const requests = [];
         snapshot.forEach(doc => requests.push(doc.data()));
 
@@ -228,7 +267,7 @@ function renderHistoryList(snapshot, container, placeholder, type) {
         requests.sort((a, b) => {
             const timeA = a.requestedAt?.toMillis() ?? 0;
             const timeB = b.requestedAt?.toMillis() ?? 0;
-            return timeB - timeA; 
+            return timeB - timeA;
         });
 
         requests.forEach(request => {
@@ -237,23 +276,28 @@ function renderHistoryList(snapshot, container, placeholder, type) {
     }
 }
 
-// --- មុខងារ​បង្កើត HTML សម្រាប់ Card នីមួយៗ ---
+// --- មុខងារ​បង្កើត HTML សម្រាប់ Card នីមួយៗ (ដូចមុន) ---
 function renderAdminCard(request, type) {
     if (!request || !request.requestId) return '';
 
-    const dateString = (request.startDate === request.endDate) 
-        ? request.startDate 
+    const dateString = (request.startDate === request.endDate)
+        ? request.startDate
         : (request.startDate && request.endDate ? `${request.startDate} ដល់ ${request.endDate}` : 'N/A');
-    
+
     const decisionTimeText = formatFirestoreTimestamp(request.decisionAt, 'HH:mm dd/MM/yyyy');
 
-    // ពិនិត្យ​មើល​ការ "បញ្ជាក់​ចូល​មក​វិញ" (សម្រាប់​តែ​ច្បាប់​ចេញ​ក្រៅ)
     let returnInfo = '';
     if (type === 'out' && request.returnStatus === 'បានចូលមកវិញ') {
         returnInfo = `
             <div class="mt-3 pt-3 border-t border-dashed border-gray-200">
                 <p class="text-sm font-semibold text-green-700">✔️ បានចូលមកវិញ</p>
                 <p class="text-sm text-gray-600">នៅម៉ោង: ${request.returnedAt || 'N/A'}</p>
+            </div>
+        `;
+    } else if (type === 'out' && request.status === 'approved' && request.returnStatus !== 'បានចូលមកវិញ') {
+         returnInfo = `
+             <div class="mt-3 pt-3 border-t border-dashed border-gray-200">
+                <p class="text-sm font-medium text-orange-600">🚶 កំពុងនៅក្រៅ</p>
             </div>
         `;
     }
@@ -267,9 +311,9 @@ function renderAdminCard(request, type) {
                 </div>
                 <span class="text-xs font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-800">បានយល់ព្រម</span>
             </div>
-            
+
             <hr class="my-3 border-gray-100">
-            
+
             <div class="space-y-1 text-sm">
                 <p><b>រយៈពេល:</b> ${request.duration || 'N/A'}</p>
                 <p><b>កាលបរិច្ឆេទ:</b> ${dateString}</p>
@@ -286,9 +330,8 @@ function renderAdminCard(request, type) {
     `;
 }
 
-// --- មុខងារ​សម្រាប់ Filter Modal ---
+// --- មុខងារ​សម្រាប់ Filter Modal (ដូចមុន) ---
 function openFilterModal() {
-    // កំណត់​តម្លៃ​ក្នុង Modal ឲ្យ​ត្រូវ​នឹង Filter បច្ចុប្បន្ន
     filterMonth.value = currentFilterMonth;
     filterYear.value = currentFilterYear;
     filterModal.classList.remove('hidden');
@@ -299,13 +342,240 @@ function closeFilterModal() {
 }
 
 function applyFilter() {
-    // យក​តម្លៃ​ថ្មី​ពី Modal
     currentFilterMonth = parseInt(filterMonth.value);
     currentFilterYear = parseInt(filterYear.value);
-    
-    // បិទ Modal
     closeFilterModal();
-    
-    // ហៅ​ទិន្នន័យ​ថ្មី​ដោយ​ផ្អែក​លើ Filter
-    fetchFilteredData();
+    fetchFilteredData(); // ទាញទិន្នន័យសម្រាប់បង្ហាញឡើងវិញ
 }
+
+// --- មុខងារ​សម្រាប់ Download Modal ---
+function openDownloadModal() {
+    // កំណត់ Default Values
+    document.getElementById('download-range').checked = true; // Default to date range
+    downloadStartDate.value = getTodayInputDate();
+    downloadEndDate.value = getTodayInputDate();
+    downloadSelectMonth.value = currentFilterMonth; // Use current display month/year
+    downloadSelectYear.value = currentFilterYear;
+    downloadStatus.textContent = ''; // Clear status
+    downloadLeaveBtn.disabled = false;
+    downloadOutBtn.disabled = false;
+    isDownloading = false;
+    downloadModal.classList.remove('hidden');
+}
+
+function closeDownloadModal() {
+    downloadModal.classList.add('hidden');
+}
+
+// --- មុខងារ​ស្នូល​សម្រាប់ Download ---
+async function handleDownload(type) { // type can be 'leave' or 'out'
+    if (isDownloading) return; // ការពារ​ការ​ចុច​ពីរ​ដង
+
+    isDownloading = true;
+    downloadLeaveBtn.disabled = true;
+    downloadOutBtn.disabled = true;
+    downloadStatus.textContent = 'កំពុង​ទាញ​ទិន្នន័យ...';
+    downloadStatus.classList.remove('text-red-500', 'text-green-500');
+    downloadStatus.classList.add('text-blue-500');
+
+    const downloadType = document.querySelector('input[name="download-type"]:checked').value;
+    const collectionPath = type === 'leave' ? leaveRequestsCollectionPath : outRequestsCollectionPath;
+    const fileNameBase = type === 'leave' ? 'Leave_Requests' : 'Out_Requests';
+
+    let q; // Firestore Query
+    let fileNameSuffix = '';
+
+    try {
+        // --- កំណត់ Query ដោយ​ផ្អែក​លើ​ជម្រើស Download ---
+        if (downloadType === 'range') {
+            const startDateStr = downloadStartDate.value;
+            const endDateStr = downloadEndDate.value;
+            if (!startDateStr || !endDateStr) throw new Error("សូម​ជ្រើសរើស​ថ្ងៃ​ចាប់ផ្តើម និង​បញ្ចប់");
+
+            // +1 day to endDate to include the whole day
+            const end = new Date(endDateStr);
+            end.setDate(end.getDate() + 1);
+
+            const startTimestamp = Timestamp.fromDate(new Date(startDateStr));
+            const endTimestamp = Timestamp.fromDate(end);
+
+            // Query based on 'decisionAt' for approved requests within the date range
+            q = query(
+                collection(db, collectionPath),
+                where("status", "==", "approved"),
+                where("decisionAt", ">=", startTimestamp),
+                where("decisionAt", "<", endTimestamp)
+            );
+            fileNameSuffix = `_${startDateStr}_to_${endDateStr}`;
+
+        } else if (downloadType === 'month') {
+            const month = parseInt(downloadSelectMonth.value);
+            const year = parseInt(downloadSelectYear.value);
+
+            const startDate = new Date(year, month, 1);
+            const endDate = new Date(year, month + 1, 1);
+
+            const startTimestamp = Timestamp.fromDate(startDate);
+            const endTimestamp = Timestamp.fromDate(endDate);
+
+            // Query based on 'decisionAt' for approved requests within the selected month/year
+            q = query(
+                collection(db, collectionPath),
+                where("status", "==", "approved"),
+                where("decisionAt", ">=", startTimestamp),
+                where("decisionAt", "<", endTimestamp)
+            );
+            fileNameSuffix = `_${String(month + 1).padStart(2, '0')}-${year}`;
+
+        } else { // downloadType === 'all'
+             q = query(
+                collection(db, collectionPath),
+                where("status", "==", "approved")
+            );
+            fileNameSuffix = '_All_Approved';
+        }
+
+        console.log(`Downloading ${type} data with type: ${downloadType}`);
+        downloadStatus.textContent = 'កំពុង​ប្រមូល​ទិន្នន័យ...';
+
+        // --- ទាញ​ទិន្នន័យ​ទាំង​អស់ (ប្រើ getDocs) ---
+        const querySnapshot = await getDocs(q);
+        const dataToExport = [];
+
+        querySnapshot.forEach((doc) => {
+            const data = doc.data();
+            // រៀបចំ​ទិន្នន័យ​សម្រាប់ Excel
+            const formattedData = {
+                "ID ស្នើសុំ": data.requestId || '',
+                "ID បុគ្គលិក": data.userId || '',
+                "ឈ្មោះ": data.name || '',
+                "ផ្នែក": data.department || '',
+                "រយៈពេល": data.duration || '',
+                "មូលហេតុ": data.reason || '',
+                "ថ្ងៃចាប់ផ្តើម": data.startDate || '',
+                "ថ្ងៃបញ្ចប់": data.endDate || '',
+                "ស្នើសុំនៅ": formatFirestoreTimestamp(data.requestedAt, 'HH:mm dd/MM/yyyy'),
+                "អនុម័តនៅ": formatFirestoreTimestamp(data.decisionAt, 'HH:mm dd/MM/yyyy'),
+            };
+            // បន្ថែម​ព័ត៌មាន​ចូល​វិញ (សម្រាប់​តែច្បាប់​ចេញ​ក្រៅ)
+            if (type === 'out') {
+                formattedData["ស្ថានភាពចូលវិញ"] = data.returnStatus === 'បានចូលមកវិញ' ? 'បានចូលមកវិញ' : (data.status === 'approved' ? 'កំពុងនៅក្រៅ' : '');
+                formattedData["ម៉ោងចូលវិញ"] = data.returnedAt || '';
+            }
+            dataToExport.push(formattedData);
+        });
+
+        if (dataToExport.length === 0) {
+            throw new Error("រក​មិន​ឃើញ​ទិន្នន័យ​សម្រាប់​លក្ខខណ្ឌ​នេះ​ទេ។");
+        }
+
+        console.log(`Found ${dataToExport.length} records to export.`);
+        downloadStatus.textContent = 'កំពុង​បង្កើត​ឯកសារ Excel...';
+
+        // --- បង្កើត Excel ដោយ​ប្រើ SheetJS ---
+        // 1. បង្កើត Worksheet
+        const ws = XLSX.utils.json_to_sheet(dataToExport);
+
+        // --- កំណត់ chiều rộng của cột (ស្រេចចិត្ត) ---
+        const columnWidths = [
+            { wch: 20 }, // ID ស្នើសុំ
+            { wch: 12 }, // ID បុគ្គលិក
+            { wch: 25 }, // ឈ្មោះ
+            { wch: 20 }, // ផ្នែក
+            { wch: 15 }, // រយៈពេល
+            { wch: 30 }, // មូលហេតុ
+            { wch: 12 }, // ថ្ងៃចាប់ផ្តើម
+            { wch: 12 }, // ថ្ងៃបញ្ចប់
+            { wch: 20 }, // ស្នើសុំនៅ
+            { wch: 20 }, // អនុម័តនៅ
+        ];
+        if (type === 'out') {
+            columnWidths.push({ wch: 15 }); // ស្ថានភាពចូលវិញ
+            columnWidths.push({ wch: 20 }); // ម៉ោងចូលវិញ
+        }
+        ws['!cols'] = columnWidths;
+
+
+        // 2. បង្កើត Workbook ថ្មី
+        const wb = XLSX.utils.book_new();
+
+        // 3. បញ្ចូល Worksheet ទៅ Workbook
+        XLSX.utils.book_append_sheet(wb, ws, "Approved Requests"); // ตั้งชื่อ Sheet
+
+        // 4. បង្កើត និង​ទាញ​យក​ឯកសារ Excel
+        const fileName = `${fileNameBase}${fileNameSuffix}.xlsx`;
+        XLSX.writeFile(wb, fileName);
+
+        downloadStatus.textContent = 'ទាញយក​បាន​ជោគជ័យ!';
+        downloadStatus.classList.remove('text-blue-500', 'text-red-500');
+        downloadStatus.classList.add('text-green-500');
+
+        // បិទ Modal បន្ទាប់ពីជោគជ័យ (ស្រេចចិត្ត)
+        setTimeout(() => {
+           // closeDownloadModal(); // អ្នកអាច uncomment វិញ បើចង់ឲ្យវាបិទស្វ័យប្រវត្តិ
+        }, 2000);
+
+
+    } catch (error) {
+        console.error("Error during download:", error);
+        downloadStatus.textContent = `Error: ${error.message}`;
+        downloadStatus.classList.remove('text-blue-500', 'text-green-500');
+        downloadStatus.classList.add('text-red-500');
+    } finally {
+        // អនុញ្ញាតឲ្យចុច Download វិញ
+        isDownloading = false;
+        downloadLeaveBtn.disabled = false;
+        downloadOutBtn.disabled = false;
+    }
+}
+
+
+// --- Helper Functions for Populating Selects ---
+function populateMonthSelect(selectElement, defaultValue) {
+    const months = ["មករា", "កុម្ភៈ", "មីនា", "មេសា", "ឧសភា", "មិថុនា", "កក្កដា", "សីហា", "កញ្ញា", "តុលា", "វិច្ឆិកា", "ធ្នូ"];
+    selectElement.innerHTML = ''; // Clear existing options
+    months.forEach((month, index) => {
+        const option = document.createElement('option');
+        option.value = index; // 0-11
+        option.text = month;
+        selectElement.add(option);
+    });
+    selectElement.value = defaultValue; // Set default
+}
+
+function populateYearSelect(selectElement, defaultValue) {
+    const currentYr = new Date().getFullYear();
+    const startYear = currentYr - 2; // Show previous 2 years
+    const endYear = currentYr + 1;   // Show next 1 year
+    selectElement.innerHTML = ''; // Clear existing options
+    for (let year = startYear; year <= endYear; year++) {
+         const option = document.createElement('option');
+         option.value = year;
+         option.text = year;
+         selectElement.add(option);
+    }
+     addYearOptionIfNeeded(selectElement, defaultValue); // Make sure default year exists
+    selectElement.value = defaultValue; // Set default
+}
+
+function addYearOptionIfNeeded(selectElement, year) {
+     let yearExists = false;
+    for (let i = 0; i < selectElement.options.length; i++) {
+        if (selectElement.options[i].value == year) {
+            yearExists = true;
+            break;
+        }
+    }
+    if (!yearExists) {
+        const option = document.createElement('option');
+        option.value = year;
+        option.text = year;
+        // Insert in sorted order or simply add (depending on preference)
+        selectElement.add(option);
+        // Optional: Sort options if needed
+         Array.from(selectElement.options)
+            .sort((a, b) => parseInt(a.value) - parseInt(b.value))
+            .forEach(option => selectElement.add(option));
+    }
+}
+
